@@ -248,6 +248,98 @@ The command that originally worked just ran `print-flag` once. This version prin
 
 ---
 
+## Limits measured on a local lab
+
+All measurements in this section come from a local lab, not the live challenge.
+The results depend on the configuration.
+
+| Local-lab configuration | Version |
+| --- | --- |
+| nginx proxy | 1.26.3 |
+| PHP CLI server | 8.4.26 |
+
+**Response headers.** nginx uses a buffer for the response headers.
+The complete block must fit `proxy_buffer_size`.
+A larger block causes the error "upstream sent too big header".
+
+| Local-lab measurement | Result |
+| --- | --- |
+| Default response buffer | 4 KiB |
+| Response headers exceed the buffer | HTTP 502 |
+| Buffer: 4 KiB; leak: 1,500 bytes | Passed |
+| Buffer: 4 KiB; leak: 1,800 bytes | Failed |
+| Buffer: 8 KiB; leak: 2,000 bytes | Passed |
+| Buffer: 16 KiB; leak: 4,000 bytes | Passed |
+| Memory that one response can carry | Approximately 1.5 KB |
+
+**Request headers.** Operators must keep each header line below the measured limit.
+The form with separate named cookies exceeds this limit.
+nginx stops the request before PHP receives it.
+Use the compact cookie form instead.
+
+| Local-lab measurement | Value |
+| --- | --- |
+| Header line rejection threshold | 8,192 bytes |
+| Line with separate named cookies | Approximately 8,800 bytes |
+| Response for an oversized line | HTTP 400 |
+
+**Body size.** Operators must keep each body below the local limit.
+
+| Local-lab measurement | Value |
+| --- | --- |
+| Body size limit | 1 MiB |
+| Largest shape as a fraction of the limit | Approximately 41 % |
+
+**Workers.** `php -S` sends `Connection: close` on every response in the local lab.
+A proxy cannot keep this upstream connection open.
+The processes compete to accept each new request.
+The master process also serves requests.
+Operators must send warm-up requests before a leak stage.
+The local-lab warm-up count is the worker count plus one.
+
+**Build.** The constants apply to a specific PHP build.
+The local lab used the code-leak shape against a glibc build of the same version.
+The producer reached the memory limit, but the consumers returned only ordinary cookies.
+
+| Local-lab measurement | Value |
+| --- | --- |
+| PHP version for the glibc test | 8.4.26 |
+| Consumers with ordinary cookies | Eight |
+| Ordinary cookie length | 32 bytes |
+
+Text offsets differ between builds.
+Do not repeat attempts with an unknown build and expect these constants to work.
+The script now shows the build for which its values were calibrated.
+It stops with that message when the code pointer does not match.
+
+## Leak policy measured on a local lab
+
+The local lab measured 724 arm requests. Each arm request uses 128 MiB of memory.
+All results below are local-lab results.
+
+php -S gives a connection to the process that already accepts connections. Of 30 measured
+batches, 16 came from one process and 12 came from two processes. A batch of 8 consumers is
+therefore 8 draws against the same one or two processes.
+
+| Local-lab policy | Runs landed | Landed on the first arm | Arms per success |
+| --- | --- | --- | --- |
+| Burst warm-up, one consumer | 84 of 84 | 69 of 84 | 1.29 |
+| Serial warm-up, 8 consumers, probes | 72 of 72 | 70 of 72 | 1.03 |
+
+Use this policy:
+
+1. Send warm-up requests equal to the worker count plus one. Send them serially.
+   They then stay on one process.
+2. Send one arm request.
+3. Send a batch of 8 consumers.
+4. If no consumer leaks, send up to 3 consumer-only batches. The armed state stays in the
+   process, so these batches cost no memory.
+5. Send a new arm request only when a consumer batch returns no cookie.
+6. Do not send more than 3 arm requests in one run.
+
+A successful leak stops the process that serves it. If that process is the master, all
+children stop. The proxy then returns 502. Treat a successful leak as a one-shot event.
+
 ## Reading the result
 
 Every run drops a new `poc-run-<UTC timestamp>` directory, unless `--output-dir` points at a new one. Everything is written before it is validated, so a run that aborts halfway still leaves usable evidence. The files worth opening:
