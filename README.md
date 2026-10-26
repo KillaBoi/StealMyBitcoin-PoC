@@ -250,27 +250,67 @@ The command that originally worked just ran `print-flag` once. This version prin
 
 ## Limits measured on a local lab
 
-These numbers come from a local lab, not from the live challenge. The lab is nginx 1.26.3 in
-front of the same PHP 8.4.26 CLI server. Treat them as configuration-dependent observations.
+All measurements in this section come from a local lab, not the live challenge.
+The results depend on the configuration.
 
-- **Response headers.** nginx buffers the response header block. It must fit `proxy_buffer_size`
-  (4 KiB by default). A larger block gets 502 "upstream sent too big header". On the lab, a leak
-  of 1,500 bytes came back fine and 1,800 bytes failed. An 8 KiB buffer passed 2,000 bytes, and a
-  16 KiB buffer passed 4,000. So a single response can carry about 1.5 KB of leaked memory.
-- **Request headers.** One header line must stay below 8,192 bytes. The named-cookie trick
-  (`c0=1; c1=1; ...`) makes a line of about 8,800 bytes, and nginx rejects it with 400 before PHP
-  sees it. Use the compact form instead: `PHPSESSID=;a=;a=;...`.
-- **Body size.** One body must stay under 1 MiB. The largest shape here is about 41 % of that.
-- **Workers.** `php -S` sends `Connection: close` on every response. No proxy can keep an upstream
-  connection, so each request is a fresh accept race among the serving processes (the master
-  serves too). Warm up the pool before a leak stage. The safe warm-up count is workers + 1.
-- **Build.** The constants in this file are specific to one PHP build. We ran the code-leak shape
-  against a glibc build of PHP 8.4.26: the producer ran out of memory correctly, and all eight
-  consumers returned ordinary 32-byte cookies. Text offsets differ between builds, so an unknown
-  build cannot work, no matter how many times you retry.
+| Local-lab configuration | Version |
+| --- | --- |
+| nginx proxy | 1.26.3 |
+| PHP CLI server | 8.4.26 |
 
-The script now says which build it is calibrated for, and it stops with that message instead of
-guessing when the leaked pointer does not fit.
+**Response headers.** nginx uses a buffer for the response headers.
+The complete block must fit `proxy_buffer_size`.
+A larger block causes the error "upstream sent too big header".
+
+| Local-lab measurement | Result |
+| --- | --- |
+| Default response buffer | 4 KiB |
+| Response headers exceed the buffer | HTTP 502 |
+| Buffer: 4 KiB; leak: 1,500 bytes | Passed |
+| Buffer: 4 KiB; leak: 1,800 bytes | Failed |
+| Buffer: 8 KiB; leak: 2,000 bytes | Passed |
+| Buffer: 16 KiB; leak: 4,000 bytes | Passed |
+| Memory that one response can carry | Approximately 1.5 KB |
+
+**Request headers.** Operators must keep each header line below the measured limit.
+The form with separate named cookies exceeds this limit.
+nginx stops the request before PHP receives it.
+Use the compact cookie form instead.
+
+| Local-lab measurement | Value |
+| --- | --- |
+| Header line rejection threshold | 8,192 bytes |
+| Line with separate named cookies | Approximately 8,800 bytes |
+| Response for an oversized line | HTTP 400 |
+
+**Body size.** Operators must keep each body below the local limit.
+
+| Local-lab measurement | Value |
+| --- | --- |
+| Body size limit | 1 MiB |
+| Largest shape as a fraction of the limit | Approximately 41 % |
+
+**Workers.** `php -S` sends `Connection: close` on every response in the local lab.
+A proxy cannot keep this upstream connection open.
+The processes compete to accept each new request.
+The master process also serves requests.
+Operators must send warm-up requests before a leak stage.
+The local-lab warm-up count is the worker count plus one.
+
+**Build.** The constants apply to a specific PHP build.
+The local lab used the code-leak shape against a glibc build of the same version.
+The producer reached the memory limit, but the consumers returned only ordinary cookies.
+
+| Local-lab measurement | Value |
+| --- | --- |
+| PHP version for the glibc test | 8.4.26 |
+| Consumers with ordinary cookies | Eight |
+| Ordinary cookie length | 32 bytes |
+
+Text offsets differ between builds.
+Do not repeat attempts with an unknown build and expect these constants to work.
+The script now shows the build for which its values were calibrated.
+It stops with that message when the code pointer does not match.
 
 ## Reading the result
 
