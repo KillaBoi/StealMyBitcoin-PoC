@@ -248,6 +248,30 @@ The command that originally worked just ran `print-flag` once. This version prin
 
 ---
 
+## Limits measured on a local lab
+
+These numbers come from a local lab, not from the live challenge. The lab is nginx 1.26.3 in
+front of the same PHP 8.4.26 CLI server. Treat them as configuration-dependent observations.
+
+- **Response headers.** nginx buffers the response header block. It must fit `proxy_buffer_size`
+  (4 KiB by default). A larger block gets 502 "upstream sent too big header". On the lab, a leak
+  of 1,500 bytes came back fine and 1,800 bytes failed. An 8 KiB buffer passed 2,000 bytes, and a
+  16 KiB buffer passed 4,000. So a single response can carry about 1.5 KB of leaked memory.
+- **Request headers.** One header line must stay below 8,192 bytes. The named-cookie trick
+  (`c0=1; c1=1; ...`) makes a line of about 8,800 bytes, and nginx rejects it with 400 before PHP
+  sees it. Use the compact form instead: `PHPSESSID=;a=;a=;...`.
+- **Body size.** One body must stay under 1 MiB. The largest shape here is about 41 % of that.
+- **Workers.** `php -S` sends `Connection: close` on every response. No proxy can keep an upstream
+  connection, so each request is a fresh accept race among the serving processes (the master
+  serves too). Warm up the pool before a leak stage. The safe warm-up count is workers + 1.
+- **Build.** The constants in this file are specific to one PHP build. We ran the code-leak shape
+  against a glibc build of PHP 8.4.26: the producer ran out of memory correctly, and all eight
+  consumers returned ordinary 32-byte cookies. Text offsets differ between builds, so an unknown
+  build cannot work, no matter how many times you retry.
+
+The script now says which build it is calibrated for, and it stops with that message instead of
+guessing when the leaked pointer does not fit.
+
 ## Reading the result
 
 Every run drops a new `poc-run-<UTC timestamp>` directory, unless `--output-dir` points at a new one. Everything is written before it is validated, so a run that aborts halfway still leaves usable evidence. The files worth opening:
