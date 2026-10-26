@@ -1,0 +1,2 @@
+#!/bin/sh
+printf '%s\n' 'LOCAL_DUMMY_WIF_NEVER_USE'
