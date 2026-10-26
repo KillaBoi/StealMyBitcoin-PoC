@@ -312,6 +312,34 @@ Do not repeat attempts with an unknown build and expect these constants to work.
 The script now shows the build for which its values were calibrated.
 It stops with that message when the code pointer does not match.
 
+## Leak policy measured on a local lab
+
+The local lab measured 724 arm requests. Each arm request uses 128 MiB of memory.
+All results below are local-lab results.
+
+php -S gives a connection to the process that already accepts connections. Of 30 measured
+batches, 16 came from one process and 12 came from two processes. A batch of 8 consumers is
+therefore 8 draws against the same one or two processes.
+
+| Local-lab policy | Runs landed | Landed on the first arm | Arms per success |
+| --- | --- | --- | --- |
+| Burst warm-up, one consumer | 84 of 84 | 69 of 84 | 1.29 |
+| Serial warm-up, 8 consumers, probes | 72 of 72 | 70 of 72 | 1.03 |
+
+Use this policy:
+
+1. Send warm-up requests equal to the worker count plus one. Send them serially.
+   They then stay on one process.
+2. Send one arm request.
+3. Send a batch of 8 consumers.
+4. If no consumer leaks, send up to 3 consumer-only batches. The armed state stays in the
+   process, so these batches cost no memory.
+5. Send a new arm request only when a consumer batch returns no cookie.
+6. Do not send more than 3 arm requests in one run.
+
+A successful leak stops the process that serves it. If that process is the master, all
+children stop. The proxy then returns 502. Treat a successful leak as a one-shot event.
+
 ## Reading the result
 
 Every run drops a new `poc-run-<UTC timestamp>` directory, unless `--output-dir` points at a new one. Everything is written before it is validated, so a run that aborts halfway still leaves usable evidence. The files worth opening:
