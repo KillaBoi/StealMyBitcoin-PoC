@@ -105,6 +105,9 @@ http {
 
 Then bring it up:
 
+> [!TIP]
+> These same files are checked in under [`lab/`](lab/) with a [`docker-compose.yml`](lab/docker-compose.yml). If you have Compose, `cd lab && docker compose up -d` stands the whole thing up on `127.0.0.1:18166`, and `docker compose down` tears it back down. The manual `docker run` recipe below is the equivalent, spelled out.
+
 ```bash
 docker network create ctf-cross-net
 
